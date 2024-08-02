@@ -7,10 +7,10 @@ from models.hf_llama.modeling_llama import LlamaForCausalLM
 
 from importlib.metadata import version
 
-from lib.prune import prune_wanda_sp, prune_flap, prune_magnitude_sp, check_sparsity
+from lib.prune import prune_flap, check_sparsity
 from lib.eval import eval_ppl
-import lm_eval
-from lm_eval.models.huggingface import HFLM
+# import lm_eval
+# from lm_eval.models.huggingface import HFLM
 import sys
 
 print('torch', version('torch'))
@@ -48,19 +48,18 @@ def main():
     parser.add_argument('--seed', type=int, default=0, help='Seed for sampling the calibration data.')
     parser.add_argument('--nsamples', type=int, default=1024, help='Number of calibration samples.')
     parser.add_argument('--pruning_ratio', type=float, default=0.5, help='Pruning ratio.')
-    parser.add_argument('--start_pruning_layer_idx', type=int, default=22, help='Layer idx post which pruning starts')
     parser.add_argument('--remove_heads', type=int, default=-1, help='Remove num_heads')
     parser.add_argument("--metrics", type=str, default="WIFV", choices=["IFV", "WIFV", "WIFN", 'N/A'])
-    parser.add_argument("--structure", type=str, default="AL-AM", choices=["UL-UM", "UL-MM", "AL-MM", "AL-AM", 'N/A'])
-    parser.add_argument("--prune_method", type=str, default="flap", choices=["flap", "wanda_sp", "mag_sp"])
+    parser.add_argument("--structure", type=str, default="AL-AM", choices=["AL-AM"])
+    parser.add_argument("--prune_method", type=str, default="flap", choices=["flap"])
     parser.add_argument("--cache_dir", default="llm_weights", type=str)
-    parser.add_argument('--unstr', action="store_true")
     parser.add_argument('--eval', action="store_true")
     parser.add_argument('--save_model', type=str, default=None, help='Path to save the pruned model.')
     parser.add_argument('--device', type=str, default='auto')
-    parser.add_argument('--gqa_groups', type=int, default=1, help='Number of gqa groups, 1 for no GQA.')
-    parser.add_argument('--head_dim', type=int, default=96)
-    parser.add_argument('--hidden_dim', type=int, default=3072)
+    parser.add_argument('--gqa_groups', type=int, default=4, help='Number of gqa groups, 1 for no GQA.')
+    parser.add_argument('--start_pruning_layer_idx', type=int, default=22, help='Layer idx post which pruning starts')
+    parser.add_argument('--head_dim', type=int, default=128)
+    parser.add_argument('--hidden_dim', type=int, default=4096)
     args = parser.parse_args()
     
     # Setting seeds for reproducibility
@@ -86,15 +85,9 @@ def main():
         if args.structure == 'N/A':
             raise ValueError("For FLAP pruning, the compressed model structure parameter must be chosen from ['UL-UM', 'UL-MM', 'AL-MM', 'AL-AM']. 'N/A' is not a valid choice.")  
         prune_flap(args, model, tokenizer, device)
-    elif args.prune_method == "wanda_sp":
-        prune_wanda_sp(args, model, tokenizer, device)
-    elif args.prune_method == "mag_sp":
-        prune_magnitude_sp(args, model, tokenizer, device)
 
     # Check the sparsity of the model
     print("*"*30)
-    sparsity_ratio = check_sparsity(model)
-    print(f"sparsity sanity check {sparsity_ratio:.4f}")
     print(f"model parameter {sum(p.numel() for p in model.parameters()) / 1000 ** 3:.2f}B")
     print("*"*30)
 

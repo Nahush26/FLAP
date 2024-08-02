@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Set common variables
-model="meta-llama/Meta-Llama-3-70B"
+model="meta-llama/Meta-Llama-3-8B"
 # cuda_device=$1
 
 # # Set CUDA device visibility
