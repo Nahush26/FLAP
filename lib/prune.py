@@ -111,30 +111,44 @@ def compress(layer, attn_mask, mlp_mask, attn_mean_inp, mlp_mean_inp, device, bi
     # Real Pruning
     # Attention Weight Pruning
     if attn_mask is not None:
+        if args.prune_kv_heads:
+            #In this case the number of groups changes during pruning.
+            retain_heads_kv = torch.count_nonzero(attn_mask)
+            retain_heads_qo = torch.count_nonzero(attn_mask).repeat_interleave(args.group_size)
+            attn_mask_kv = attn_mask.repeat_interleave(args.head_dim)
+            attn_mask_qo = attn_mask.repeat_interleave(args.group_size).repeat_interleave(args.head_dim)
+
+            layer.self_attn.k_proj.weight.data = layer.self_attn.k_proj.weight.data[torch.where(attn_mask_kv)[0]]
+            layer.self_attn.v_proj.weight.data = layer.self_attn.v_proj.weight.data[torch.where(attn_mask_kv)[0]]
+
+            layer.self_attn.k_proj.out_features = attn_mask_kv.sum().item()
+            layer.self_attn.v_proj.out_features = attn_mask_kv.sum().item()
+
+            if layer.self_attn.v_proj.bias.data is not None:
+                layer.self_attn.v_proj.bias.data = layer.self_attn.v_proj.bias.data[torch.where(attn_mask_kv)[0]]
+            if layer.self_attn.k_proj.bias.data is not None:
+                layer.self_attn.k_proj.bias.data = layer.self_attn.k_proj.bias.data[torch.where(attn_mask_kv)[0]]
+
+
+        elif args.group_size>1 and not args.prune_kv_heads:
+            # In this case KV heads do not get pruned, instead we change the group size of GQA uniformly
+            retain_heads_qo = torch.count_nonzero(attn_mask)*(args.num_heads//args.group_size)
+            attn_mask_qo = attn_mask.repeat(args.num_heads//args.group_size).repeat_interleave(args.head_dim)
+            
         
-        retain_heads_kv = torch.count_nonzero(attn_mask)
-        retain_heads_qo = torch.count_nonzero(attn_mask).repeat_interleave(args.gqa_groups)
-        attn_mask_kv = attn_mask.repeat_interleave(args.head_dim)
-        attn_mask_qo = attn_mask.repeat_interleave(args.gqa_groups).repeat_interleave(args.head_dim)
-        
-        # Prune the query, key and value projection weights
+        # Prune the query projection weights
         # We reduce the size of the weights based on the attention mask
         layer.self_attn.q_proj.weight.data = layer.self_attn.q_proj.weight.data[torch.where(attn_mask_qo)[0]]
-        layer.self_attn.k_proj.weight.data = layer.self_attn.k_proj.weight.data[torch.where(attn_mask_kv)[0]]
-        layer.self_attn.v_proj.weight.data = layer.self_attn.v_proj.weight.data[torch.where(attn_mask_kv)[0]]
+
         
-        # Update output dimensions of q, k, v projections based on remaining heads
+        # Update output dimensions of q projections based on remaining heads
         layer.self_attn.q_proj.out_features = attn_mask_qo.sum().item()
-        layer.self_attn.k_proj.out_features = attn_mask_kv.sum().item()
-        layer.self_attn.v_proj.out_features = attn_mask_kv.sum().item()
+
 
         output_weight = layer.self_attn.o_proj.weight.data
 
         # Support for models with KQV Bias
-        if layer.self_attn.v_proj.bias.data is not None:
-            layer.self_attn.v_proj.bias.data = layer.self_attn.v_proj.bias.data[torch.where(attn_mask_kv)[0]]
-        if layer.self_attn.k_proj.bias.data is not None:
-            layer.self_attn.k_proj.bias.data = layer.self_attn.k_proj.bias.data[torch.where(attn_mask_kv)[0]]
+
         if layer.self_attn.q_proj.bias.data is not None:
             layer.self_attn.q_proj.bias.data = layer.self_attn.q_proj.bias.data[torch.where(attn_mask_qo)[0]]
 
@@ -147,8 +161,11 @@ def compress(layer, attn_mask, mlp_mask, attn_mean_inp, mlp_mean_inp, device, bi
         # Update layer configurations for the new output shape after pruning
         layer.self_attn.num_heads = int(torch.sum(retain_heads_qo))
         layer.self_attn.hidden_size = int(torch.sum(retain_heads_qo * args.head_dim))
-        if args.gqa_groups>1:
-            layer.self_attn.num_key_value_heads = retain_heads_kv
+        if args.group_size>1:
+            if args.prune_kv_heads:
+                layer.self_attn.num_key_value_heads = retain_heads_kv
+            else:
+                layer.self_attn.num_key_value_groups = layer.self_attn.num_heads // layer.self_attn.num_key_value_heads
         
         if bias:
             # Re-initialize the Linear layer with new shape and bias
@@ -264,7 +281,12 @@ def prune_flap(args, model, tokenizer, device=torch.device("cuda:0")):
     if args.structure in ["AL-AM"]:
         attn_metric = torch.stack(attn_metric_list)
         attn_metric = standarlization(attn_metric)
-        attn_metric = attn_metric.reshape(len(layers)-args.start_pruning_layer_idx, -1, args.head_dim*args.gqa_groups).mean(dim=2)
+        
+        if args.prune_kv_heads:
+            attn_metric = attn_metric.reshape(len(layers)-args.start_pruning_layer_idx, -1, args.head_dim*args.group_size).mean(dim=2)
+        elif args.group_size>1 and not args.prune_kv_heads:
+            attn_metric = attn_metric.reshape(len(layers)-args.start_pruning_layer_idx, args.num_heads//args.group_size, args.group_size, args.head_dim).mean(dim=1).mean(dim=-1)
+            
         
         mlp_metric = torch.stack(mlp_metric_list)
         mlp_metric = standarlization(mlp_metric)
@@ -290,6 +312,8 @@ def prune_flap(args, model, tokenizer, device=torch.device("cuda:0")):
                 
     model.config.use_cache = use_cache 
     torch.cuda.empty_cache()
+    
+
 
 def calculate_bi(model, dataloader, tokenizer, pruning_method="angular_distance", pruning_token='last'):
         """

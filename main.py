@@ -56,10 +56,12 @@ def main():
     parser.add_argument('--eval', action="store_true")
     parser.add_argument('--save_model', type=str, default=None, help='Path to save the pruned model.')
     parser.add_argument('--device', type=str, default='auto')
-    parser.add_argument('--gqa_groups', type=int, default=4, help='Number of gqa groups, 1 for no GQA.')
+    parser.add_argument('--group_size', type=int, default=7, help='Group size, 1 for no GQA.')
+    parser.add_argument('--num_heads', type=int, default=14, help='Number of Query Heads')
+    parser.add_argument('--prune_kv_heads', type=bool, default=True, help='Retains KV Heads if set to false.')
     parser.add_argument('--start_pruning_layer_idx', type=int, default=22, help='Layer idx post which pruning starts')
-    parser.add_argument('--head_dim', type=int, default=128)
-    parser.add_argument('--hidden_dim', type=int, default=4096)
+    parser.add_argument('--head_dim', type=int, default=64)
+    parser.add_argument('--hidden_dim', type=int, default=896)
     args = parser.parse_args()
     
     # Setting seeds for reproducibility

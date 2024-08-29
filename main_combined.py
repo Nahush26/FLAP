@@ -3,6 +3,7 @@ import os
 import numpy as np
 import torch
 import gc
+import json
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from models.hf_llama.modeling_llama import LlamaForCausalLM
 from datasets import load_dataset
@@ -57,14 +58,21 @@ def main():
     parser.add_argument('--save_model', type=str, default=None, help='Path to save the pruned model.')
     parser.add_argument('--device', type=str, default='0')
     parser.add_argument('--block_pruning_bs', type=int, default=2)
-    parser.add_argument('--gqa_groups', type=int, default=7, help='Number of gqa groups, 1 for no GQA.')
+    parser.add_argument('--group_size', type=int, default=7, help='Group size, 1 for no GQA.')
+    parser.add_argument('--num_heads', type=int, default=14, help='Number of Query Heads')
+    parser.add_argument('--prune_kv_heads', type=bool, default=False, help='Retains KV Heads if set to false')
     parser.add_argument('--start_pruning_layer_idx', type=int, default=18, help='Layer idx post which pruning starts')
     parser.add_argument('--head_dim', type=int, default=64)
     parser.add_argument('--hidden_dim', type=int, default=896)
     parser.add_argument('--skip_blocks', type=list, default=[1])
-    parser.add_argument('--block_first', type=bool, default=-True)
-    parser.add_argument('--perform_eval', type=bool, default=-True)
+    parser.add_argument("--log_path", type=str, default="logs.txt")
+    parser.add_argument('--strategy', type=str, default="width_depth", choices=["width_depth", "depth_width"])
+    parser.add_argument('--perform_eval', type=bool, default=True)
     args = parser.parse_args()
+
+    with open(args.log_path, "a") as file:
+        file.write(json.dumps(str(args)))
+        file.write("\n")
 
     np.random.seed(args.seed)
     torch.random.manual_seed(args.seed)
@@ -78,28 +86,83 @@ def main():
     dataset = load_dataset("wikitext", "wikitext-2-raw-v1", split="test").filter(lambda example: len(example["text"].split())>100).select(list(range(100))) # 100 samples for pruning metric computation
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=args.block_pruning_bs, shuffle=True)
     tokenizer = AutoTokenizer.from_pretrained(args.model, use_fast=False)
-    print(f"Unpruned model parameters {sum(p.numel() for p in model.parameters()) / 1000 ** 3:.2f}B")
+    orig_params = sum(p.numel() for p in model.parameters()) / 1000 ** 2
+    print(f"Unpruned model parameters {orig_params}M\n")
+    with open(args.log_path, "a") as file:
+        file.write(json.dumps(f"Unpruned model parameters {orig_params}M"))
+        file.write("\n")
 
-    if args.block_first:
+    if args.strategy == "depth_width":
         print(f"Performing Block Pruning followed by FLAP")
         bi_scores = calculate_bi(model, dataloader, tokenizer, args.pruning_method, args.pruning_token)
         block_pruned_model = prune_model_blocks(model, bi_scores, args.num_blocks_to_prune, args.skip_blocks)
+        block_pruned_params = sum(p.numel() for p in block_pruned_model.parameters()) / 1000 ** 2
+        with open(args.log_path, "a") as file:
+            file.write(json.dumps(f"Compression After Block Pruning {1 - block_pruned_params/orig_params}"))
+            file.write("\n")
         del model
         torch.cuda.empty_cache()
         gc.collect()
         block_pruned_model.to(device)
         prune_flap(args, block_pruned_model, tokenizer, device)
-        print(f"Pruned model parameter {sum(p.numel() for p in block_pruned_model.parameters()) / 1000 ** 3:.2f}B")
+        block_and_width_pruned_params = sum(p.numel() for p in block_pruned_model.parameters()) / 1000 ** 2
+        with open(args.log_path, "a") as file:
+            file.write(json.dumps(f"Compression After Block Pruning Follwed by Width Pruning {1 - block_and_width_pruned_params/orig_params}"))
+            file.write("\n")
 
-    else:
+    elif args.strategy == "width_depth":
         print("Performing FLAP followed by Block Pruning")
         prune_flap(args, model, tokenizer, device)
+        width_pruned_params = sum(p.numel() for p in model.parameters()) / 1000 ** 2
+        with open(args.log_path, "a") as file:
+            file.write(json.dumps(f"Compression After Width Pruning {1 - width_pruned_params/orig_params}"))
+            file.write("\n")
         bi_scores = calculate_bi(model, dataloader, tokenizer, args.pruning_method, args.pruning_token)
         block_pruned_model = prune_model_blocks(model, bi_scores, args.num_blocks_to_prune, args.skip_blocks)
         del model
+        width_and_block_pruned_params = sum(p.numel() for p in block_pruned_model.parameters()) / 1000 ** 2
+        with open(args.log_path, "a") as file:
+            file.write(json.dumps(f"Compression After Width Pruning followed by block pruning {1 - width_and_block_pruned_params/orig_params}"))
+            file.write("\n")
         torch.cuda.empty_cache()
         gc.collect()
         block_pruned_model.to(device)
+
+    model = block_pruned_model
+
+    if args.save_model:
+        if not os.path.exists(args.save_model):
+            os.makedirs(args.save_model)
+        # torch.save(model, f'{args.save_model}/pruned_model.pt')
+        model.save_pretrained(args.save_model)
+        tokenizer.save_pretrained(args.save_model)
+
+    # Evaluate the model
+    if args.eval:
+        lm_obj = HFLM(pretrained=model)
+        task_manager = lm_eval.tasks.TaskManager()
+        results = []
+        result = lm_eval.simple_evaluate(
+            model=lm_obj,
+            tasks=["wikitext"],
+            limit=0.01,
+            task_manager=task_manager,
+            batch_size='auto',
+        )
+        results.append(result['results'])
+        result = lm_eval.simple_evaluate(
+            model=lm_obj,
+            tasks=["mmlu"],
+            num_fewshot=5,
+            limit=0.01,
+            task_manager=task_manager,
+            batch_size='auto',
+        )
+        results.append(result['mmlu'])
+        with open(args.log_path, "a") as file:
+            file.write(json.dumps(str(results)))
+            file.write("\n")
+        print(results)
 
 if __name__ == '__main__':
     main()
