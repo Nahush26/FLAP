@@ -1,11 +1,13 @@
+import copy
+import math
+
 import torch
 import torch.nn as nn
-from .layerwrapper import WrappedGPT, BiasGPT
-from .data import get_loaders
-import math
-from tqdm import tqdm
-import copy
 import torch.nn.functional as F
+from tqdm import tqdm
+
+from .data import get_loaders
+from .layerwrapper import BiasGPT, WrappedGPT
 
 # create a dictionary to map the method name to the function
 """
@@ -42,7 +44,9 @@ def find_layers(module, layers=[nn.Linear], name=""):
     for name1, child in module.named_children():
         res.update(
             find_layers(
-                child, layers=layers, name=name + "." + name1 if name != "" else name1
+                child,
+                layers=layers,
+                name=name + "." + name1 if name != "" else name1,
             )
         )
     return res
@@ -71,7 +75,9 @@ def prepare_calibration_input(model, dataloader, device):
 
     dtype = next(iter(model.parameters())).dtype
     inps = torch.zeros(
-        (2048, model.seqlen, model.config.hidden_size), dtype=dtype, device=device
+        (2048, model.seqlen, model.config.hidden_size),
+        dtype=dtype,
+        device=device,
     )
     inps.requires_grad = False
     cache = {"i": 0, "position_ids": None}
@@ -285,7 +291,8 @@ def prune_flap(args, model, tokenizer, device=torch.device("cuda:0")):
 
     # Split into sub-problems, separate statistics for each module
     for i in tqdm(
-        range(args.start_pruning_layer_idx, len(layers)), desc="Processing layers"
+        range(args.start_pruning_layer_idx, len(layers)),
+        desc="Processing layers",
     ):
         layer = layers[i]
         subset = {}
@@ -296,7 +303,11 @@ def prune_flap(args, model, tokenizer, device=torch.device("cuda:0")):
             model, "hf_device_map", {}
         ):  ## handle the case for llama-30B and llama-65B, when the device map has multiple GPUs;
             dev = model.hf_device_map[f"model.layers.{i}"]
-            inps, outs, position_ids = inps.to(dev), outs.to(dev), position_ids.to(dev)
+            inps, outs, position_ids = (
+                inps.to(dev),
+                outs.to(dev),
+                position_ids.to(dev),
+            )
 
         wrapped_layers = {}
         for name in subset:
@@ -332,7 +343,10 @@ def prune_flap(args, model, tokenizer, device=torch.device("cuda:0")):
                 )
             wrapped_layers[name].free()
 
-        inps, outs = outs, inps  # Use the original output as input to the next layer
+        inps, outs = (
+            outs,
+            inps,
+        )  # Use the original output as input to the next layer
         torch.cuda.empty_cache()
 
     standarlization = lambda x: (x - torch.mean(x, axis=1, keepdim=True)) / torch.std(
@@ -484,7 +498,10 @@ def calculate_bi(
 
 
 def prune_model_blocks(
-    model, importance_scores: list, num_blocks_to_prune: int, skip_blocks: list = None
+    model,
+    importance_scores: list,
+    num_blocks_to_prune: int,
+    skip_blocks: list = None,
 ):
     """
     Prunes blocks from the transformer model based on the importance scores.

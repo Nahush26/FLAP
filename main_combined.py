@@ -1,26 +1,28 @@
 import argparse
-import os
-import numpy as np
-import torch
 import gc
 import json
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from models.hf_llama.modeling_llama import LlamaForCausalLM
-from datasets import load_dataset
-from importlib.metadata import version
 import os
 
-os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-from lib.prune import prune_flap, calculate_bi, prune_model_blocks
-from lib.eval import eval_ppl
+import numpy as np
+import torch
+from datasets import load_dataset
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
 import lm_eval
 from lm_eval.models.huggingface import HFLM
+
+from lib.prune import calculate_bi, prune_flap, prune_model_blocks
+
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
 
 def get_llm(model, device):
     if device == "auto":
         model = AutoModelForCausalLM.from_pretrained(
-            model, torch_dtype=torch.float16, device_map=device, trust_remote_code=True
+            model,
+            torch_dtype=torch.float16,
+            device_map=device,
+            trust_remote_code=True,
         )
     else:
         model = AutoModelForCausalLM.from_pretrained(
@@ -52,13 +54,22 @@ def get_llm(model, device):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--model", type=str, default="meta-llama/Meta-Llama-3-8B", help="LLaMA model"
+        "--model",
+        type=str,
+        default="meta-llama/Meta-Llama-3-8B",
+        help="LLaMA model",
     )  # Huggingface model name
     parser.add_argument(
-        "--seed", type=int, default=0, help="Seed for sampling the calibration data."
+        "--seed",
+        type=int,
+        default=0,
+        help="Seed for sampling the calibration data.",
     )
     parser.add_argument(
-        "--nsamples", type=int, default=1024, help="Number of calibration samples."
+        "--nsamples",
+        type=int,
+        default=1024,
+        help="Number of calibration samples.",
     )
     parser.add_argument(
         "--pruning_ratio", type=float, default=0.5, help="Pruning ratio."
@@ -76,14 +87,20 @@ def main():
     parser.add_argument("--pruning_token", type=str, default="all")
     parser.add_argument("--calculate_ppl", type=bool, default=True)
     parser.add_argument(
-        "--metrics", type=str, default="WIFV", choices=["IFV", "WIFV", "WIFN", "N/A"]
+        "--metrics",
+        type=str,
+        default="WIFV",
+        choices=["IFV", "WIFV", "WIFN", "N/A"],
     )
     parser.add_argument("--structure", type=str, default="AL-AM", choices=["AL-AM"])
     parser.add_argument("--prune_method", type=str, default="flap", choices=["flap"])
     parser.add_argument("--cache_dir", default="llm_weights", type=str)
     parser.add_argument("--eval", action="store_true")
     parser.add_argument(
-        "--save_model", type=str, default=None, help="Path to save the pruned model."
+        "--save_model",
+        type=str,
+        default=None,
+        help="Path to save the pruned model.",
     )
     parser.add_argument("--device", type=str, default="0")
     parser.add_argument("--block_pruning_bs", type=int, default=2)
@@ -147,7 +164,11 @@ def main():
 
     if args.strategy == "depth_width":
         bi_scores = calculate_bi(
-            model, dataloader, tokenizer, args.pruning_method, args.pruning_token
+            model,
+            dataloader,
+            tokenizer,
+            args.pruning_method,
+            args.pruning_token,
         )
         block_pruned_model = prune_model_blocks(
             model, bi_scores, args.num_blocks_to_prune, args.skip_blocks
@@ -189,7 +210,11 @@ def main():
             )
             file.write("\n")
         bi_scores = calculate_bi(
-            model, dataloader, tokenizer, args.pruning_method, args.pruning_token
+            model,
+            dataloader,
+            tokenizer,
+            args.pruning_method,
+            args.pruning_token,
         )
         block_pruned_model = prune_model_blocks(
             model, bi_scores, args.num_blocks_to_prune, args.skip_blocks

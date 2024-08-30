@@ -1,29 +1,25 @@
 import argparse
 import os
-import numpy as np
-import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from models.hf_llama.modeling_llama import LlamaForCausalLM
-
 from importlib.metadata import version
 
-from lib.prune import prune_flap, check_sparsity
+import lm_eval
+import numpy as np
+import torch
+from lm_eval.models.huggingface import HFLM
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
 from lib.eval import eval_ppl
-
-# import lm_eval
-# from lm_eval.models.huggingface import HFLM
-import sys
-
-print("torch", version("torch"))
-print("transformers", version("transformers"))
-print("accelerate", version("accelerate"))
-print("# of gpus: ", torch.cuda.device_count())
+from lib.prune import check_sparsity, prune_flap
+from models.hf_llama.modeling_llama import LlamaForCausalLM
 
 
 def get_llm(model, device):
     if device == "auto":
         model = AutoModelForCausalLM.from_pretrained(
-            model, torch_dtype=torch.float16, device_map=device, trust_remote_code=True
+            model,
+            torch_dtype=torch.float16,
+            device_map=device,
+            trust_remote_code=True,
         )
     else:
         model = AutoModelForCausalLM.from_pretrained(
@@ -55,27 +51,42 @@ def get_llm(model, device):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--model", type=str, default="meta-llama/Meta-Llama-3-8B", help="LLaMA model"
+        "--model",
+        type=str,
+        default="meta-llama/Meta-Llama-3-8B",
+        help="LLaMA model",
     )  # Huggingface model name
     parser.add_argument(
-        "--seed", type=int, default=0, help="Seed for sampling the calibration data."
+        "--seed",
+        type=int,
+        default=0,
+        help="Seed for sampling the calibration data.",
     )
     parser.add_argument(
-        "--nsamples", type=int, default=1024, help="Number of calibration samples."
+        "--nsamples",
+        type=int,
+        default=1024,
+        help="Number of calibration samples.",
     )
     parser.add_argument(
         "--pruning_ratio", type=float, default=0.5, help="Pruning ratio."
     )
     parser.add_argument("--remove_heads", type=int, default=-1, help="Remove num_heads")
     parser.add_argument(
-        "--metrics", type=str, default="WIFV", choices=["IFV", "WIFV", "WIFN", "N/A"]
+        "--metrics",
+        type=str,
+        default="WIFV",
+        choices=["IFV", "WIFV", "WIFN", "N/A"],
     )
     parser.add_argument("--structure", type=str, default="AL-AM", choices=["AL-AM"])
     parser.add_argument("--prune_method", type=str, default="flap", choices=["flap"])
     parser.add_argument("--cache_dir", default="llm_weights", type=str)
     parser.add_argument("--eval", action="store_true")
     parser.add_argument(
-        "--save_model", type=str, default=None, help="Path to save the pruned model."
+        "--save_model",
+        type=str,
+        default=None,
+        help="Path to save the pruned model.",
     )
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument(
