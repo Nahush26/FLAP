@@ -1,15 +1,15 @@
 import argparse
 import gc
 import json
+import logging
 import os
 
+import lm_eval
 import numpy as np
 import torch
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
-import lm_eval
 from lm_eval.models.huggingface import HFLM
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from lib.prune import calculate_bi, prune_flap, prune_model_blocks
 
@@ -99,7 +99,7 @@ def main():
     parser.add_argument(
         "--save_model",
         type=str,
-        default=None,
+        default="checkpoints",
         help="Path to save the pruned model.",
     )
     parser.add_argument("--device", type=str, default="0")
@@ -125,7 +125,7 @@ def main():
     parser.add_argument("--head_dim", type=int, default=64)
     parser.add_argument("--hidden_dim", type=int, default=896)
     parser.add_argument("--skip_blocks", type=list, default=[1])
-    parser.add_argument("--log_path", type=str, default="logs.txt")
+    parser.add_argument("--log_path", type=str, default="prune.log")
     parser.add_argument(
         "--strategy",
         type=str,
@@ -135,9 +135,20 @@ def main():
     parser.add_argument("--perform_eval", type=bool, default=True)
     args = parser.parse_args()
 
-    with open(args.log_path, "a") as file:
-        file.write(json.dumps(str(args)))
-        file.write("\n")
+    logger = logging.getLogger("my_custom_logger")
+    logger.setLevel(logging.DEBUG)
+
+    # File handler setup
+    file_handler = logging.FileHandler(args.log_path, mode="a")
+    file_handler.setLevel(logging.DEBUG)
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    logger.propagate = False
+    logger.propagate = False
+
+    for arg, value in vars(args).items():
+        logger.info(f"{arg}: {value}")
 
     np.random.seed(args.seed)
     torch.random.manual_seed(args.seed)
@@ -158,9 +169,7 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(args.model, use_fast=False)
     orig_params = sum(p.numel() for p in model.parameters()) / 1000**2
 
-    with open(args.log_path, "a") as file:
-        file.write(json.dumps(f"Unpruned model parameters {orig_params}M"))
-        file.write("\n")
+    logger.info(f"Unpruned model parameters {orig_params}M")
 
     if args.strategy == "depth_width":
         bi_scores = calculate_bi(
@@ -176,13 +185,9 @@ def main():
         block_pruned_params = (
             sum(p.numel() for p in block_pruned_model.parameters()) / 1000**2
         )
-        with open(args.log_path, "a") as file:
-            file.write(
-                json.dumps(
-                    f"Compression After Block Pruning {1 - block_pruned_params/orig_params}"
-                )
-            )
-            file.write("\n")
+        logger.ino(
+            f"Compression After Block Pruning {1 - block_pruned_params/orig_params}"
+        )
         del model
         torch.cuda.empty_cache()
         gc.collect()
@@ -191,24 +196,16 @@ def main():
         block_and_width_pruned_params = (
             sum(p.numel() for p in block_pruned_model.parameters()) / 1000**2
         )
-        with open(args.log_path, "a") as file:
-            file.write(
-                json.dumps(
-                    f"Compression After Block Pruning Follwed by Width Pruning {1 - block_and_width_pruned_params/orig_params}"
-                )
-            )
-            file.write("\n")
+        logger.info(
+            f"Compression After Block Pruning Follwed by Width Pruning {1 - block_and_width_pruned_params/orig_params}"
+        )
 
     elif args.strategy == "width_depth":
         prune_flap(args, model, tokenizer, device)
         width_pruned_params = sum(p.numel() for p in model.parameters()) / 1000**2
-        with open(args.log_path, "a") as file:
-            file.write(
-                json.dumps(
-                    f"Compression After Width Pruning {1 - width_pruned_params/orig_params}"
-                )
-            )
-            file.write("\n")
+        logger.info(
+            f"Compression After Width Pruning {1 - width_pruned_params/orig_params}"
+        )
         bi_scores = calculate_bi(
             model,
             dataloader,
@@ -223,13 +220,9 @@ def main():
         width_and_block_pruned_params = (
             sum(p.numel() for p in block_pruned_model.parameters()) / 1000**2
         )
-        with open(args.log_path, "a") as file:
-            file.write(
-                json.dumps(
-                    f"Compression After Width Pruning followed by block pruning {1 - width_and_block_pruned_params/orig_params}"
-                )
-            )
-            file.write("\n")
+        logger.info(
+            f"Compression After Width Pruning followed by block pruning {1 - width_and_block_pruned_params/orig_params}"
+        )
         torch.cuda.empty_cache()
         gc.collect()
         block_pruned_model.to(device)
@@ -237,9 +230,10 @@ def main():
     model = block_pruned_model
 
     if args.save_model:
+        directory = f"{args.strategy}_{args.pruning_ratio}_{args.num_blocks_to_prune}"
+        args.save_model = os.path.join(args.save_model, directory)
         if not os.path.exists(args.save_model):
             os.makedirs(args.save_model)
-        # torch.save(model, f'{args.save_model}/pruned_model.pt')
         model.save_pretrained(args.save_model)
         tokenizer.save_pretrained(args.save_model)
 
@@ -264,10 +258,10 @@ def main():
             task_manager=task_manager,
             batch_size="auto",
         )
-        results.append(result["mmlu"])
-        with open(args.log_path, "a") as file:
-            file.write(json.dumps(str(results)))
-            file.write("\n")
+
+        results.append({"mmlu": result["results"]["mmlu"]["acc,none"]})
+        for i, result in enumerate(results):
+            logger.info(f"{i} :\n{json.dumps(result, indent=4)}")
 
 
 if __name__ == "__main__":
