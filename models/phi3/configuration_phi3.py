@@ -22,11 +22,13 @@
 from transformers.configuration_utils import PretrainedConfig
 from transformers.utils import logging
 
+from .._model_mixins import PrunedConfigMixin
+
 
 logger = logging.get_logger(__name__)
 
 
-class Phi3Config(PretrainedConfig):
+class Phi3Config(PretrainedConfig, PrunedConfigMixin):
     r"""
     This is the configuration class to store the configuration of a [`Phi3Model`]. It is used to instantiate a Phi-3
     model according to the specified arguments, defining the model architecture. Instantiating a configuration with the
@@ -170,6 +172,8 @@ class Phi3Config(PretrainedConfig):
             tie_word_embeddings=tie_word_embeddings,
             **kwargs,
         )
+
+        self.__post_init__(**kwargs)
 
     def _rope_scaling_adjustment(self):
         """
