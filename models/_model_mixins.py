@@ -23,7 +23,7 @@ class PrunedConfigMixin:
             self.mlp_bias = pruning_config.get("mlp_bias", False)
             self.attention_bias = pruning_config.get("attention_bias", False)
             self.first_pruned_layer_idx = pruning_config.get(
-                "first_pruned_layer_idx", 0
+                "first_pruned_layer_idx", 1e9
             )
             self.num_hidden_layers = pruning_config.get(
                 "num_hidden_layers", self.num_hidden_layers
@@ -44,7 +44,7 @@ class PrunedConfigMixin:
         else:
             self.mlp_bias = kwargs.get("mlp_bias", False)
             self.attention_bias = kwargs.get("attention_bias", False)
-            self.first_pruned_layer_idx = kwargs.get("first_pruned_layer_idx", 0)
+            self.first_pruned_layer_idx = kwargs.get("first_pruned_layer_idx", 1e9)
             self.intermediate_size = repeat_list_or_single_element(
                 self.num_hidden_layers, self.intermediate_size
             )
@@ -62,7 +62,7 @@ class BaseMLP(torch.nn.Module):
         self.config = config
         self.layer_idx = layer_idx
 
-    def __patch_mlp_init(self):
+    def _patch_mlp_init(self):
         """Extends MLP module initialization to a pruned model."""
         self.intermediate_size = self.config.intermediate_size[self.layer_idx]
 
@@ -70,7 +70,7 @@ class BaseMLP(torch.nn.Module):
 class PrunedAttentionMixin:
     """Mixin class to adapt attention mechanism for pruned models."""
 
-    def __patch_attention_init(self):
+    def _patch_attention_init(self):
         """Extends attention module initialization to a pruned model."""
         self.num_key_value_heads = self.config.num_key_value_heads[self.layer_idx]
         self.num_heads = self.config.num_attention_heads[self.layer_idx]

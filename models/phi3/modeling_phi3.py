@@ -405,7 +405,7 @@ class Phi3MLP(BaseMLP):
     def __init__(self, config: Phi3Config, layer_idx: int):
         super().__init__(config=config, layer_idx=layer_idx)
         self.config = config
-        self.__patch_mlp_init()
+        self._patch_mlp_init()
         self.gate_up_proj = nn.Linear(
             config.hidden_size, 2 * self.intermediate_size, bias=config.mlp_bias
         )
@@ -460,7 +460,7 @@ class Phi3Attention(nn.Module, PrunedAttentionMixin):
         self.num_heads = config.num_attention_heads
         # self.head_dim = self.hidden_size // self.num_heads
         self.num_key_value_heads = config.num_key_value_heads
-        self.__patch_attention_init()
+        self._patch_attention_init()
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
         self.max_position_embeddings = config.max_position_embeddings
         self.original_max_position_embeddings = config.original_max_position_embeddings

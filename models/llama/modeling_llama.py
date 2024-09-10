@@ -315,7 +315,7 @@ class LlamaMLP(BaseMLP):
         self.config = config
         self.hidden_size = config.hidden_size
         self.intermediate_size = config.intermediate_size
-        self.__patch_mlp_init()
+        self._patch_mlp_init()
         self.gate_proj = nn.Linear(
             self.hidden_size, self.intermediate_size, bias=config.mlp_bias
         )
@@ -395,7 +395,7 @@ class LlamaAttention(nn.Module, PrunedAttentionMixin):
         self.hidden_size = config.hidden_size
         self.num_heads = config.num_attention_heads
         # self.head_dim = self.hidden_size // self.num_heads
-        self.__patch_attention_init()
+        self._patch_attention_init()
         self.num_key_value_heads = config.num_key_value_heads
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
         self.max_position_embeddings = config.max_position_embeddings
