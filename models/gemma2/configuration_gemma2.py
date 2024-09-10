@@ -25,8 +25,10 @@
 # limitations under the License.
 from transformers import PretrainedConfig
 
+from .._model_mixins import PrunedConfigMixin
 
-class Gemma2Config(PretrainedConfig):
+
+class Gemma2Config(PretrainedConfig, PrunedConfigMixin):
     r"""
     This is the configuration class to store the configuration of a [`Gemma2Model`]. It is used to instantiate an Gemma2
     model according to the specified arguments, defining the model architecture. Instantiating a configuration with the
@@ -154,3 +156,8 @@ class Gemma2Config(PretrainedConfig):
         self.query_pre_attn_scalar = query_pre_attn_scalar
         self.sliding_window = sliding_window
         self.cache_implementation = "hybrid"
+
+        self.__post_init__(
+            attention_bias=attention_bias,
+            **kwargs,
+        )
