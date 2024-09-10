@@ -21,11 +21,13 @@
 from transformers.configuration_utils import PretrainedConfig
 from transformers.utils import logging
 
+from .._model_mixins import PrunedConfigMixin
+
 
 logger = logging.get_logger(__name__)
 
 
-class Qwen2Config(PretrainedConfig):
+class Qwen2Config(PretrainedConfig, PrunedConfigMixin):
     r"""
     This is the configuration class to store the configuration of a [`Qwen2Model`]. It is used to instantiate a
     Qwen2 model according to the specified arguments, defining the model architecture. Instantiating a configuration
@@ -142,3 +144,5 @@ class Qwen2Config(PretrainedConfig):
             tie_word_embeddings=tie_word_embeddings,
             **kwargs,
         )
+
+        self.__post_init__(**kwargs)
