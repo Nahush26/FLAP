@@ -48,6 +48,7 @@ from transformers.utils import (
     replace_return_docstrings,
 )
 from .configuration_phi3 import Phi3Config
+from .._model_mixins import BaseMLP
 
 
 if is_flash_attn_2_available():
@@ -400,16 +401,18 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     return q_embed, k_embed
 
 
-class Phi3MLP(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-
+class Phi3MLP(BaseMLP):
+    def __init__(self, config: Phi3Config, layer_idx: int):
+        super().__init__(config=config, layer_idx=layer_idx)
         self.config = config
+        self.__patch_mlp_init()
         self.gate_up_proj = nn.Linear(
-            config.hidden_size, 2 * config.intermediate_size, bias=False
+            config.hidden_size, 2 * self.intermediate_size, bias=config.mlp_bias
         )
         self.down_proj = nn.Linear(
-            config.intermediate_size, config.hidden_size, bias=False
+            self.intermediate_size,
+            config.hidden_size,
+            bias=config.mlp_bias or layer_idx >= config.first_pruned_layer_idx,
         )
 
         self.activation_fn = ACT2FN[config.hidden_act]
@@ -893,7 +896,7 @@ class Phi3DecoderLayer(nn.Module):
             config, layer_idx=layer_idx
         )
 
-        self.mlp = Phi3MLP(config)
+        self.mlp = Phi3MLP(config, layer_idx=layer_idx)
         self.input_layernorm = Phi3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
         self.resid_attn_dropout = nn.Dropout(config.resid_pdrop)
