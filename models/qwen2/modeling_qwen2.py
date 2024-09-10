@@ -50,7 +50,7 @@ from transformers.utils import (
     replace_return_docstrings,
 )
 from .configuration_qwen2 import Qwen2Config
-
+from .._model_mixins import BaseMLP
 
 if is_flash_attn_2_available():
     from transformers.modeling_flash_attention_utils import _flash_attention_forward
@@ -234,14 +234,23 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
 
 
 # Copied from transformers.models.mistral.modeling_mistral.MistralMLP with Mistral->Qwen2
-class Qwen2MLP(nn.Module):
-    def __init__(self, config):
-        super().__init__()
+class Qwen2MLP(BaseMLP):
+    def __init__(self, config: Qwen2Config, layer_idx: int):
+        super().__init__(config=config, layer_idx=layer_idx)
         self.hidden_size = config.hidden_size
         self.intermediate_size = config.intermediate_size
-        self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
-        self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
-        self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=False)
+        self.__patch_mlp_init()
+        self.gate_proj = nn.Linear(
+            self.hidden_size, self.intermediate_size, bias=config.mlp_bias
+        )
+        self.up_proj = nn.Linear(
+            self.hidden_size, self.intermediate_size, bias=config.mlp_bias
+        )
+        self.down_proj = nn.Linear(
+            self.intermediate_size,
+            self.hidden_size,
+            bias=config.mlp_bias or self.layer_idx >= config.first_pruned_layer_idx,
+        )
         self.act_fn = ACT2FN[config.hidden_act]
 
     def forward(self, hidden_state):
@@ -705,7 +714,7 @@ class Qwen2DecoderLayer(nn.Module):
             config, layer_idx
         )
 
-        self.mlp = Qwen2MLP(config)
+        self.mlp = Qwen2MLP(config, layer_idx=layer_idx)
         self.input_layernorm = Qwen2RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = Qwen2RMSNorm(
             config.hidden_size, eps=config.rms_norm_eps
