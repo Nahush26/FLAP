@@ -1,5 +1,6 @@
 import typing as tp
-from transformers import logging
+from transformers import logging, PretrainedConfig
+import torch
 
 logger = logging.get_logger(__name__)
 
@@ -53,3 +54,14 @@ class PrunedConfigMixin:
             self.num_key_value_heads = repeat_list_or_single_element(
                 self.num_hidden_layers, self.num_key_value_heads
             )
+
+
+class BaseMLP(torch.nn.Module):
+    def __init__(self, config: PretrainedConfig, layer_idx: int):
+        super().__init__()
+        self.config = config
+        self.layer_idx = layer_idx
+
+    def __patch_mlp_init(self):
+        """Extends MLP module initialization to a pruned model."""
+        self.intermediate_size = self.config.intermediate_size[self.layer_idx]
