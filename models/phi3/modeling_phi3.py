@@ -48,7 +48,7 @@ from transformers.utils import (
     replace_return_docstrings,
 )
 from .configuration_phi3 import Phi3Config
-from .._model_mixins import BaseMLP
+from .._model_mixins import BaseMLP, PrunedAttentionMixin
 
 
 if is_flash_attn_2_available():
@@ -441,7 +441,7 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
 
-class Phi3Attention(nn.Module):
+class Phi3Attention(nn.Module, PrunedAttentionMixin):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
     def __init__(self, config: Phi3Config, layer_idx: Optional[int] = None):
@@ -458,8 +458,9 @@ class Phi3Attention(nn.Module):
         self.attention_dropout = config.attention_dropout
         self.hidden_size = config.hidden_size
         self.num_heads = config.num_attention_heads
-        self.head_dim = self.hidden_size // self.num_heads
+        # self.head_dim = self.hidden_size // self.num_heads
         self.num_key_value_heads = config.num_key_value_heads
+        self.__patch_attention_init()
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
         self.max_position_embeddings = config.max_position_embeddings
         self.original_max_position_embeddings = config.original_max_position_embeddings
@@ -467,19 +468,21 @@ class Phi3Attention(nn.Module):
         self.rope_scaling = config.rope_scaling
         self.is_causal = True
 
-        if (self.head_dim * self.num_heads) != self.hidden_size:
-            raise ValueError(
-                f"hidden_size must be divisible by num_heads (got `hidden_size`: {self.hidden_size}"
-                f" and `num_heads`: {self.num_heads})."
-            )
+        # if (self.head_dim * self.num_heads) != self.hidden_size:
+        #     raise ValueError(
+        #         f"hidden_size must be divisible by num_heads (got `hidden_size`: {self.hidden_size}"
+        #         f" and `num_heads`: {self.num_heads})."
+        #     )
 
         op_size = self.num_heads * self.head_dim + 2 * (
             self.num_key_value_heads * self.head_dim
         )
         self.o_proj = nn.Linear(
-            self.num_heads * self.head_dim, self.hidden_size, bias=False
+            self.num_heads * self.head_dim,
+            self.hidden_size,
+            bias=config.attention_bias or layer_idx >= config.first_pruned_layer_idx,
         )
-        self.qkv_proj = nn.Linear(self.hidden_size, op_size, bias=False)
+        self.qkv_proj = nn.Linear(self.hidden_size, op_size, bias=config.attention_bias)
         self._init_rope()
 
     def _init_rope(self):
