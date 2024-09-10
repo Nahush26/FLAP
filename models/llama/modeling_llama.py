@@ -52,7 +52,7 @@ from transformers.utils import (
     replace_return_docstrings,
 )
 from .configuration_llama import LlamaConfig
-from .._model_mixins import BaseMLP
+from .._model_mixins import BaseMLP, PrunedAttentionMixin
 
 logger = logging.get_logger(__name__)
 
@@ -377,7 +377,7 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
 
-class LlamaAttention(nn.Module):
+class LlamaAttention(nn.Module, PrunedAttentionMixin):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
     def __init__(self, config: LlamaConfig, layer_idx: Optional[int] = None):
@@ -394,18 +394,19 @@ class LlamaAttention(nn.Module):
         self.attention_dropout = config.attention_dropout
         self.hidden_size = config.hidden_size
         self.num_heads = config.num_attention_heads
-        self.head_dim = self.hidden_size // self.num_heads
+        # self.head_dim = self.hidden_size // self.num_heads
+        self.__patch_attention_init()
         self.num_key_value_heads = config.num_key_value_heads
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
         self.max_position_embeddings = config.max_position_embeddings
         self.rope_theta = config.rope_theta
         self.is_causal = True
 
-        if (self.head_dim * self.num_heads) != self.hidden_size:
-            raise ValueError(
-                f"hidden_size must be divisible by num_heads (got `hidden_size`: {self.hidden_size}"
-                f" and `num_heads`: {self.num_heads})."
-            )
+        # if (self.head_dim * self.num_heads) != self.hidden_size:
+        #     raise ValueError(
+        #         f"hidden_size must be divisible by num_heads (got `hidden_size`: {self.hidden_size}"
+        #         f" and `num_heads`: {self.num_heads})."
+        #     )
 
         self.q_proj = nn.Linear(
             self.hidden_size, self.num_heads * self.head_dim, bias=config.attention_bias
@@ -421,7 +422,9 @@ class LlamaAttention(nn.Module):
             bias=config.attention_bias,
         )
         self.o_proj = nn.Linear(
-            self.hidden_size, self.hidden_size, bias=config.attention_bias
+            self.hidden_size,
+            self.hidden_size,
+            bias=config.attention_bias or layer_idx >= config.first_pruned_layer_idx,
         )
 
         # TODO (joao): remove in v4.45 (RoPE is computed in the model, not in the decoder layers)
