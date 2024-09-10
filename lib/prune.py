@@ -90,6 +90,7 @@ def prepare_calibration_input(model, dataloader, device):
         def forward(self, inp, **kwargs):
             inps[cache["i"]] = inp
             cache["i"] += 1
+            cache['attention_mask'] = kwargs['attention_mask']
             cache["position_ids"] = kwargs["position_ids"]
             raise ValueError
 
@@ -102,10 +103,12 @@ def prepare_calibration_input(model, dataloader, device):
     layers[0] = layers[0].module
 
     outs = torch.zeros_like(inps)
-    position_ids = cache["position_ids"]
+    attention_mask = cache['attention_mask']
+    position_ids = cache['position_ids']
     model.config.use_cache = use_cache
 
-    return inps, outs, position_ids
+    return inps, outs, attention_mask, position_ids 
+
 
 
 def compress(
@@ -146,7 +149,6 @@ def compress(
             attn_mask_qo = attn_mask.repeat_interleave(
                 args.group_size
             ).repeat_interleave(args.head_dim)
-
             layer.self_attn.k_proj.weight.data = layer.self_attn.k_proj.weight.data[
                 torch.where(attn_mask_kv)[0]
             ]
@@ -157,11 +159,11 @@ def compress(
             layer.self_attn.k_proj.out_features = attn_mask_kv.sum().item()
             layer.self_attn.v_proj.out_features = attn_mask_kv.sum().item()
 
-            if layer.self_attn.v_proj.bias.data is not None:
+            if layer.self_attn.v_proj.bias is not None:
                 layer.self_attn.v_proj.bias.data = layer.self_attn.v_proj.bias.data[
                     torch.where(attn_mask_kv)[0]
                 ]
-            if layer.self_attn.k_proj.bias.data is not None:
+            if layer.self_attn.k_proj.bias is not None:
                 layer.self_attn.k_proj.bias.data = layer.self_attn.k_proj.bias.data[
                     torch.where(attn_mask_kv)[0]
                 ]
@@ -188,7 +190,7 @@ def compress(
 
         # Support for models with Query Bias
 
-        if layer.self_attn.q_proj.bias.data is not None:
+        if layer.self_attn.q_proj.bias is not None:
             layer.self_attn.q_proj.bias.data = layer.self_attn.q_proj.bias.data[
                 torch.where(attn_mask_qo)[0]
             ]
@@ -206,7 +208,7 @@ def compress(
         # Update layer configurations for the new output shape after pruning
         layer.self_attn.num_heads = int(torch.sum(retain_heads_qo))
         layer.self_attn.hidden_size = int(torch.sum(retain_heads_qo * args.head_dim))
-        if args.group_size > 1:
+        if args.group_size >= 1:
             if args.prune_kv_heads:
                 layer.self_attn.num_key_value_heads = retain_heads_kv
             else:
@@ -283,7 +285,7 @@ def prune_flap(args, model, tokenizer, device=torch.device("cuda:0")):
     )
 
     with torch.no_grad():
-        inps, outs, position_ids = prepare_calibration_input(model, dataloader, device)
+        inps, outs, attention_mask, position_ids = prepare_calibration_input(model, dataloader, device)
     layers = model.model.layers
     attn_metric_list, mlp_metric_list = [], []
     attn_baseline_inp_list, mlp_baseline_inp_list = [], []
@@ -291,7 +293,7 @@ def prune_flap(args, model, tokenizer, device=torch.device("cuda:0")):
 
     # Split into sub-problems, separate statistics for each module
     for i in tqdm(
-        range(args.start_pruning_layer_idx, len(layers)),
+        range( args.start_pruning_layer_idx, len(layers)-4),
         desc="Processing layers",
     ):
         layer = layers[i]
@@ -303,9 +305,10 @@ def prune_flap(args, model, tokenizer, device=torch.device("cuda:0")):
             model, "hf_device_map", {}
         ):  ## handle the case for llama-30B and llama-65B, when the device map has multiple GPUs;
             dev = model.hf_device_map[f"model.layers.{i}"]
-            inps, outs, position_ids = (
+            inps, outs, attention_mask, position_ids = (
                 inps.to(dev),
                 outs.to(dev),
+                attention_mask.to(dev),
                 position_ids.to(dev),
             )
 
@@ -324,7 +327,7 @@ def prune_flap(args, model, tokenizer, device=torch.device("cuda:0")):
             handles.append(subset[name].register_forward_hook(add_batch(name)))
         for j in range(args.nsamples):
             with torch.no_grad():
-                outs[j] = layer(inps[j].unsqueeze(0), position_ids=position_ids)[0]
+                 outs[j] = layer(inps[j].unsqueeze(0), attention_mask=attention_mask, position_ids=position_ids)[0]
         for h in handles:
             h.remove()
 
@@ -359,14 +362,14 @@ def prune_flap(args, model, tokenizer, device=torch.device("cuda:0")):
 
         if args.prune_kv_heads:
             attn_metric = attn_metric.reshape(
-                len(layers) - args.start_pruning_layer_idx,
+                len(layers)-args.start_pruning_layer_idx - 4,
                 -1,
-                args.head_dim * args.group_size,
+                args.head_dim*args.group_size,
             ).mean(dim=2)
         elif args.group_size > 1 and not args.prune_kv_heads:
             attn_metric = (
                 attn_metric.reshape(
-                    len(layers) - args.start_pruning_layer_idx,
+                    len(layers) - args.start_pruning_layer_idx - 4,
                     args.num_heads // args.group_size,
                     args.group_size,
                     args.head_dim,
@@ -393,20 +396,23 @@ def prune_flap(args, model, tokenizer, device=torch.device("cuda:0")):
         attn_mask = attn_metric > threshold
         mlp_mask = mlp_metric > threshold
 
-    for idx in range(len(layers) - args.start_pruning_layer_idx):
+    for idx in range(len(layers) - args.start_pruning_layer_idx - 4):
+        actual_idx =  idx + args.start_pruning_layer_idx
+        # print(attn_mask.shape)
+        # print(idx, actual_idx)
         if f"model.layers.{i}" in getattr(model, "hf_device_map", {}):
             compress(
-                model.model.layers[idx],
+                model.model.layers[actual_idx],
                 attn_mask[idx],
                 None,
                 attn_baseline_inp_list[idx],
                 None,
-                model.hf_device_map[f"model.layers.{idx}"],
+                model.hf_device_map[f"model.layers.{actual_idx}"],
                 args=args,
             )
         else:
             compress(
-                model.model.layers[idx],
+                model.model.layers[actual_idx],
                 attn_mask[idx],
                 None,
                 attn_baseline_inp_list[idx],
@@ -417,16 +423,16 @@ def prune_flap(args, model, tokenizer, device=torch.device("cuda:0")):
 
         if f"model.layers.{i}" in getattr(model, "hf_device_map", {}):
             compress(
-                model.model.layers[idx],
+                model.model.layers[actual_idx],
                 None,
                 mlp_mask[idx],
                 None,
                 mlp_baseline_inp_list[idx],
-                model.hf_device_map[f"model.layers.{idx}"],
+                model.hf_device_map[f"model.layers.{actual_idx}"],
             )
         else:
             compress(
-                model.model.layers[idx],
+                model.model.layers[actual_idx],
                 None,
                 mlp_mask[idx],
                 None,
