@@ -26,8 +26,10 @@
 from transformers.configuration_utils import PretrainedConfig
 from transformers.modeling_rope_utils import rope_config_validation
 
+from .._model_mixins import PrunedConfigMixin
 
-class LlamaConfig(PretrainedConfig):
+
+class LlamaConfig(PretrainedConfig, PrunedConfigMixin):
     r"""
     This is the configuration class to store the configuration of a [`LlamaModel`]. It is used to instantiate an LLaMA
     model according to the specified arguments, defining the model architecture. Instantiating a configuration with the
@@ -203,5 +205,11 @@ class LlamaConfig(PretrainedConfig):
             bos_token_id=bos_token_id,
             eos_token_id=eos_token_id,
             tie_word_embeddings=tie_word_embeddings,
+            **kwargs,
+        )
+
+        self.__post_init__(
+            attention_bias=attention_bias,
+            mlp_bias=mlp_bias,
             **kwargs,
         )
