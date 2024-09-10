@@ -52,7 +52,7 @@ from transformers.utils import (
     replace_return_docstrings,
 )
 from .configuration_llama import LlamaConfig
-
+from .._model_mixins import BaseMLP
 
 logger = logging.get_logger(__name__)
 
@@ -309,12 +309,13 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     return q_embed, k_embed
 
 
-class LlamaMLP(nn.Module):
-    def __init__(self, config):
-        super().__init__()
+class LlamaMLP(BaseMLP):
+    def __init__(self, config: LlamaConfig, layer_idx: int):
+        super().__init__(config=config, layer_idx=layer_idx)
         self.config = config
         self.hidden_size = config.hidden_size
         self.intermediate_size = config.intermediate_size
+        self.__patch_mlp_init()
         self.gate_proj = nn.Linear(
             self.hidden_size, self.intermediate_size, bias=config.mlp_bias
         )
@@ -322,7 +323,9 @@ class LlamaMLP(nn.Module):
             self.hidden_size, self.intermediate_size, bias=config.mlp_bias
         )
         self.down_proj = nn.Linear(
-            self.intermediate_size, self.hidden_size, bias=config.mlp_bias
+            self.intermediate_size,
+            self.hidden_size,
+            bias=config.mlp_bias or layer_idx >= self.config.first_pruned_layer_idx,
         )
         self.act_fn = ACT2FN[config.hidden_act]
 
@@ -815,7 +818,7 @@ class LlamaDecoderLayer(nn.Module):
             config=config, layer_idx=layer_idx
         )
 
-        self.mlp = LlamaMLP(config)
+        self.mlp = LlamaMLP(config, layer_idx=layer_idx)
         self.input_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = LlamaRMSNorm(
             config.hidden_size, eps=config.rms_norm_eps
