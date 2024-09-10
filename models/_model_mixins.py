@@ -65,3 +65,13 @@ class BaseMLP(torch.nn.Module):
     def __patch_mlp_init(self):
         """Extends MLP module initialization to a pruned model."""
         self.intermediate_size = self.config.intermediate_size[self.layer_idx]
+
+
+class PrunedAttentionMixin:
+    """Mixin class to adapt attention mechanism for pruned models."""
+
+    def __patch_attention_init(self):
+        """Extends attention module initialization to a pruned model."""
+        self.num_key_value_heads = self.config.num_key_value_heads[self.layer_idx]
+        self.num_heads = self.config.num_attention_heads[self.layer_idx]
+        self.head_dim = 128
